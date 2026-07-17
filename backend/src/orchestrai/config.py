@@ -19,4 +19,5 @@ class Settings(BaseSettings):
     )
 
     openrouter_api_key: SecretStr = SecretStr("")
+    openrouter_model: str = "openai/gpt-4o-mini"
     log_level: str = "INFO"

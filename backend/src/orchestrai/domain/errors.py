@@ -15,3 +15,7 @@ class BudgetExceededError(DomainError):
 
 class InvalidTaskTransitionError(DomainError):
     """Raised when a task is asked to make a lifecycle jump its rules forbid."""
+
+
+class InvalidPlanError(DomainError):
+    """Raised when a plan is structurally invalid (dangling deps or a cycle)."""

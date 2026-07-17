@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 dependencies = [
+    "httpx>=0.28.1",
     "pydantic>=2.7",
     "pydantic-settings>=2.2",
     "structlog>=24.1",
@@ -17,6 +18,8 @@ dev = [
     "pytest-cov>=5.0",
     "mypy>=1.10",
     "ruff>=0.5",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
 ]
 
 [build-system]
@@ -52,6 +55,7 @@ known-first-party = ["orchestrai"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
 markers = [
     "eval: end-to-end evals against real LLMs (opt-in, costs money)",
 ]
