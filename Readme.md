@@ -190,47 +190,44 @@ Infrastructure (OpenRouter, Filesystem, Git, Docker, RAG)
 
 ---
 
-# 📁 Planned Architecture
+# 📁 Repository Structure
+
+Monorepo with a strict frontend/backend split. The backend is a fully
+independent Python application; any frontend communicates with it only
+through its HTTP/WebSocket API.
+
+The tree below is the **target architecture** — folders are created
+incrementally, only when a milestone actually needs them. See
+`backend/README.md` for what exists today.
 
 ```text
-autodev-ai/
-
-├── interfaces/
-│   ├── api/
-│   └── cli/
+orchestrai/
+├── frontend/                        # Any future frontend (React, Vue, Svelte, ...)
 │
-├── orchestration/
-│   ├── graph/
-│   ├── nodes/
-│   ├── edges/
-│   └── state.py
+├── backend/                         # The entire Python application
+│   ├── pyproject.toml               # deps + ruff + mypy + pytest config
+│   ├── src/orchestrai/
+│   │   ├── domain/                  # pure business models & rules (no I/O)
+│   │   │   └── models/
+│   │   ├── application/
+│   │   │   ├── ports/               # Protocols: llm, sandbox, events, repos, vcs
+│   │   │   └── services/            # use cases: verification, cost tracking
+│   │   ├── agents/                  # analyst, planner, coder, debugger, reviewer
+│   │   ├── orchestration/           # LangGraph graph, state, nodes, routing
+│   │   ├── infrastructure/          # adapters: llm, sandbox, persistence,
+│   │   │                            #           vcs, telemetry
+│   │   ├── interfaces/
+│   │   │   └── cli/                 # v1 interface (FastAPI control plane later)
+│   │   └── config.py                # pydantic-settings
+│   └── tests/
+│       ├── unit/
+│       ├── integration/
+│       └── evals/                   # golden-prompt e2e (opt-in, real LLMs)
 │
-├── application/
-│   └── agents/
-│
-├── domain/
-│   ├── models/
-│   ├── policies/
-│   └── value_objects/
-│
-├── ports/
-│   ├── llm.py
-│   ├── tools.py
-│   ├── memory.py
-│   └── events.py
-│
-├── infrastructure/
-│   ├── llm/
-│   ├── tools/
-│   ├── memory/
-│   ├── events/
-│   └── rag/
-│
-├── telemetry/
-├── prompts/
-├── config/
-├── tests/
-└── main.py
+├── docs/                            # architecture notes, ADRs
+├── .github/workflows/               # CI (backend quality gates)
+├── .gitignore
+└── Readme.md
 ```
 
 ---
