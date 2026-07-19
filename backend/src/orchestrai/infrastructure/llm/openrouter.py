@@ -14,13 +14,16 @@ Costs: OpenRouter returns a ``usage.cost`` field (USD) when asked via the
 """
 
 import json
+import time
 from decimal import Decimal
 from typing import Any
 
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from orchestrai.application.event_bus import EventBus
 from orchestrai.application.ports.llm import LLMError, LLMResponse, Message, Usage
+from orchestrai.domain.events import LLMCallCompleted
 
 _API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -33,12 +36,14 @@ class OpenRouterProvider:
         api_key: str,
         model: str,
         *,
+        events: EventBus | None = None,
         timeout_s: float = 120.0,
         max_parse_retries: int = 2,
     ) -> None:
         if not api_key:
             raise ValueError("OpenRouter API key is required")
         self._model = model
+        self._events = events or EventBus()
         self._max_parse_retries = max_parse_retries
         self._client = httpx.AsyncClient(
             timeout=timeout_s,
@@ -53,6 +58,7 @@ class OpenRouterProvider:
     ) -> LLMResponse[SchemaT]:
         conversation = [m.model_dump() for m in messages]
         total_usage = Usage(prompt_tokens=0, completion_tokens=0, cost_usd=Decimal("0"))
+        started = time.monotonic()
 
         for attempt in range(1 + self._max_parse_retries):
             content, usage = await self._call_api(conversation, output_schema)
@@ -78,6 +84,15 @@ class OpenRouterProvider:
                     }
                 )
                 continue
+            self._events.emit(
+                LLMCallCompleted(
+                    model=self._model,
+                    prompt_tokens=total_usage.prompt_tokens,
+                    completion_tokens=total_usage.completion_tokens,
+                    cost_usd=total_usage.cost_usd,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
+            )
             return LLMResponse[SchemaT](parsed=parsed, usage=total_usage, model=self._model)
 
         raise AssertionError("unreachable")  # loop always returns or raises

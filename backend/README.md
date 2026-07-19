@@ -5,31 +5,48 @@ only contains files that are actually in use. Layers appear on disk when the
 first real code needs them (see "Target architecture" below for where things
 will live).
 
-## Current state (M2 — LLM port + adapters)
+## Current state (M4 — first LangGraph slice)
 
 ```
 backend/
-├── pyproject.toml           # deps + ruff (lint & format) + mypy strict + pytest
+├── pyproject.toml           # deps + tools config + `orchestrai` CLI entry point
 ├── src/orchestrai/
 │   ├── config.py            # pydantic-settings (ORCHESTRAI_ env prefix)
 │   ├── domain/              # pure business rules — no I/O, no frameworks
-│   │   ├── errors.py        # DomainError hierarchy (business rule violations)
-│   │   └── models/
-│   │       ├── budget.py            # immutable spend tracking; exhausted → halt
-│   │       ├── task.py              # task lifecycle state machine; bounded retry
-│   │       ├── plan.py              # task DAG; cycle/dangling-dep validation
-│   │       └── requirement_spec.py  # Analyst output; ambiguity union (resolved|open)
+│   │   ├── errors.py        # DomainError hierarchy
+│   │   ├── events.py        # frozen facts: LLMCallCompleted
+│   │   └── models/          # budget, task, plan, requirement_spec
 │   ├── application/
-│   │   └── ports/
-│   │       └── llm.py       # LLMProvider Protocol + Message/Usage/LLMResponse
-│   └── infrastructure/
-│       └── llm/
-│           ├── openrouter.py  # real adapter: structured output, parse-retry, cost
-│           ├── fake.py        # deterministic test double (queued responses)
-│           └── smoke.py       # manual live check (real API, tiny cost)
+│   │   ├── event_bus.py     # fan-out to sinks; sink failures isolated
+│   │   └── ports/           # llm.py (LLMProvider), events.py (EventSink)
+│   ├── agents/
+│   │   ├── analyst.py       # prompt → RequirementSpec
+│   │   └── planner.py       # spec → PlanDraft → validated Plan (DAG)
+│   ├── orchestration/
+│   │   ├── state.py         # GraphState: travels through the graph, checkpointable
+│   │   └── graph.py         # analyze → approval_gate (interrupt) → plan
+│   ├── infrastructure/
+│   │   ├── llm/             # openrouter.py, fake.py, smoke.py
+│   │   └── telemetry/       # sinks.py: ConsoleSink + JsonlTraceSink
+│   └── interfaces/
+│       └── cli.py           # typer+rich: `orchestrai run` / `orchestrai resume`
 └── tests/
-    └── unit/                # mirrors src; domain at 100% coverage
+    ├── unit/                # mirrors src; domain at 100% coverage
+    └── integration/         # full graph runs on FakeLLM: pause/approve/reject/resume
 ```
+
+## Try it
+
+```bash
+cd backend
+uv run orchestrai run "Build a Todo API with FastAPI and JWT auth"
+# → spec appears, run pauses; then:
+uv run orchestrai resume <run-id> --approve
+# → validated task plan + total cost
+```
+
+Runtime artifacts land in `runs/` (checkpoints) and `traces/` (event log),
+both git-ignored.
 
 Domain models `Artifact`, `VerificationResult`, and domain events are
 deliberately absent — each will be created in the milestone that first

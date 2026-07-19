@@ -7,9 +7,13 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 dependencies = [
     "httpx>=0.28.1",
+    "langgraph>=1.2.9",
+    "langgraph-checkpoint-sqlite>=3.1.0",
     "pydantic>=2.7",
     "pydantic-settings>=2.2",
+    "rich>=15.0.0",
     "structlog>=24.1",
+    "typer>=0.27.0",
 ]
 
 [dependency-groups]
@@ -21,6 +25,9 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "respx>=0.23.1",
 ]
+
+[project.scripts]
+orchestrai = "orchestrai.interfaces.cli:app"
 
 [build-system]
 requires = ["hatchling"]

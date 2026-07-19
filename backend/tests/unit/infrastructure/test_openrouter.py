@@ -8,7 +8,9 @@ import pytest
 import respx
 from pydantic import BaseModel, Field
 
+from orchestrai.application.event_bus import EventBus
 from orchestrai.application.ports.llm import LLMError, Message
+from orchestrai.domain.events import DomainEvent, LLMCallCompleted
 from orchestrai.infrastructure.llm.openrouter import _API_URL, OpenRouterProvider
 
 
@@ -98,3 +100,35 @@ async def test_malformed_response_shape_becomes_llm_error() -> None:
         await make_provider().complete(
             [Message(role="user", content="q")], output_schema=TinySchema
         )
+
+
+class _RecordingSink:
+    def __init__(self) -> None:
+        self.events: list[DomainEvent] = []
+
+    def handle(self, event: DomainEvent) -> None:
+        self.events.append(event)
+
+
+@respx.mock
+async def test_successful_call_emits_llm_call_completed() -> None:
+    sink = _RecordingSink()
+    provider = make_provider(events=EventBus([sink]))
+    respx.post(_API_URL).respond(json=api_response(json.dumps({"answer": "x"})))
+    await provider.complete([Message(role="user", content="q")], output_schema=TinySchema)
+
+    assert len(sink.events) == 1
+    event = sink.events[0]
+    assert isinstance(event, LLMCallCompleted)
+    assert event.model == "test/model"
+    assert event.cost_usd == Decimal("0.002")
+
+
+@respx.mock
+async def test_failed_call_emits_no_completion_event() -> None:
+    sink = _RecordingSink()
+    provider = make_provider(events=EventBus([sink]))
+    respx.post(_API_URL).respond(status_code=500, text="boom")
+    with pytest.raises(LLMError):
+        await provider.complete([Message(role="user", content="q")], output_schema=TinySchema)
+    assert sink.events == []

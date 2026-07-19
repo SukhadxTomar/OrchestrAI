@@ -6,11 +6,14 @@ Not a pytest test — run manually once your .env has an API key:
 """
 
 import asyncio
+from pathlib import Path
 
+from orchestrai.application.event_bus import EventBus
 from orchestrai.application.ports.llm import Message
 from orchestrai.config import Settings
 from orchestrai.domain.models.requirement_spec import RequirementSpec
 from orchestrai.infrastructure.llm.openrouter import OpenRouterProvider
+from orchestrai.infrastructure.telemetry.sinks import ConsoleSink, JsonlTraceSink
 
 _SYSTEM = (
     "You are a requirements analyst. Read the user's project prompt and produce "
@@ -23,9 +26,11 @@ _PROMPT = "Build a Todo API using FastAPI with JWT authentication and unit tests
 
 async def main() -> None:
     settings = Settings()
+    events = EventBus([ConsoleSink(), JsonlTraceSink(Path("traces/smoke.jsonl"))])
     provider = OpenRouterProvider(
         api_key=settings.openrouter_api_key.get_secret_value(),
         model=settings.openrouter_model,
+        events=events,
     )
     try:
         response = await provider.complete(
