@@ -75,3 +75,15 @@ class Plan(BaseModel):
     def is_complete(self) -> bool:
         """True when every task has reached a terminal state."""
         return all(t.is_terminal for t in self.tasks)
+
+    def with_updated_task(self, updated: Task) -> "Plan":
+        """Return a new Plan with one task replaced (matched by id).
+
+        Raises:
+            InvalidPlanError: if no task with that id exists.
+        """
+        if all(t.id != updated.id for t in self.tasks):
+            raise InvalidPlanError(f"cannot update unknown task {updated.id!r}")
+        return self.model_copy(
+            update={"tasks": tuple(updated if t.id == updated.id else t for t in self.tasks)}
+        )

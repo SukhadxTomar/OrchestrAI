@@ -34,3 +34,40 @@ class LLMCallCompleted(DomainEvent):
     completion_tokens: int = Field(ge=0)
     cost_usd: Decimal = Field(ge=0)
     duration_ms: int = Field(ge=0)
+
+
+class FileWritten(DomainEvent):
+    """The sandbox wrote a file inside the workspace."""
+
+    path: str  # workspace-relative
+    size_bytes: int = Field(ge=0)
+
+
+class CommandExecuted(DomainEvent):
+    """The sandbox ran a command inside the workspace."""
+
+    command: tuple[str, ...]
+    exit_code: int
+    duration_ms: int = Field(ge=0)
+    timed_out: bool = False
+
+
+class TaskVerified(DomainEvent):
+    """A task's code passed verification."""
+
+    task_id: str
+    attempts: int = Field(ge=1)
+
+
+class TaskFailed(DomainEvent):
+    """A task's code failed verification on this attempt."""
+
+    task_id: str
+    attempt: int = Field(ge=1)
+    summary: str
+
+
+class TaskEscalated(DomainEvent):
+    """A task ran out of retries and was handed to a human."""
+
+    task_id: str

@@ -21,7 +21,9 @@ from orchestrai.application.event_bus import EventBus
 from orchestrai.config import Settings
 from orchestrai.domain.models.budget import Budget
 from orchestrai.infrastructure.llm.openrouter import OpenRouterProvider
+from orchestrai.infrastructure.sandbox.local import LocalProcessSandbox
 from orchestrai.infrastructure.telemetry.sinks import ConsoleSink, JsonlTraceSink
+from orchestrai.infrastructure.vcs.git_workspace import GitWorkspace
 from orchestrai.orchestration.graph import build_graph
 from orchestrai.orchestration.state import GraphState
 
@@ -30,6 +32,7 @@ console = Console()
 
 _DB_PATH = Path("runs/checkpoints.sqlite")
 _TRACES_DIR = Path("traces")
+_WORKSPACES_DIR = Path("workspaces")
 
 
 async def _drive(run_id: str, graph_input: Any, settings: Settings) -> None:
@@ -40,10 +43,12 @@ async def _drive(run_id: str, graph_input: Any, settings: Settings) -> None:
         model=settings.openrouter_model,
         events=events,
     )
+    sandbox = LocalProcessSandbox(_WORKSPACES_DIR / run_id, events=events)
+    vcs = GitWorkspace(sandbox.root)
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
         async with AsyncSqliteSaver.from_conn_string(str(_DB_PATH)) as saver:
-            graph = build_graph(provider, checkpointer=saver)
+            graph = build_graph(provider, sandbox, checkpointer=saver, events=events, vcs=vcs)
             config = {"configurable": {"thread_id": run_id}}
             result = await graph.ainvoke(graph_input, config)
             _render(run_id, result)
@@ -55,17 +60,25 @@ def _render(run_id: str, result: dict[str, Any]) -> None:
     interrupts = result.get("__interrupt__")
     if interrupts:
         payload = interrupts[0].value
-        state = GraphState.model_validate(result)
-        assert state.spec is not None
-        spec = state.spec
-        lines = [f"[bold]{spec.summary}[/bold]", ""]
-        lines += [f"  • {r}" for r in spec.functional_requirements]
-        if spec.tech_stack:
-            lines += ["", f"stack: {', '.join(spec.tech_stack)}"]
-        for amb in spec.ambiguities:
-            mark = "[yellow]open[/yellow]" if amb.kind == "open" else "[dim]resolved[/dim]"
-            lines += ["", f"[{mark}] {amb.question}"]
-        console.print(Panel("\n".join(lines), title=payload.get("question", "Approval needed")))
+        title = payload.get("question", "Approval needed")
+        if "tasks" in payload:  # plan gate
+            lines = []
+            for t in payload["tasks"]:
+                deps = f"  (after {', '.join(t['depends_on'])})" if t["depends_on"] else ""
+                lines.append(f"[bold]{t['id']}[/bold]: {t['description']}{deps}")
+            console.print(Panel("\n".join(lines), title=title))
+        else:  # spec gate
+            state = GraphState.model_validate(result)
+            assert state.spec is not None
+            spec = state.spec
+            lines = [f"[bold]{spec.summary}[/bold]", ""]
+            lines += [f"  • {r}" for r in spec.functional_requirements]
+            if spec.tech_stack:
+                lines += ["", f"stack: {', '.join(spec.tech_stack)}"]
+            for amb in spec.ambiguities:
+                mark = "[yellow]open[/yellow]" if amb.kind == "open" else "[dim]resolved[/dim]"
+                lines += ["", f"[{mark}] {amb.question}"]
+            console.print(Panel("\n".join(lines), title=title))
         console.print(
             f"\nrun id: [bold cyan]{run_id}[/bold cyan]\n"
             f"  approve: [green]uv run orchestrai resume {run_id} --approve[/green]\n"
@@ -74,12 +87,16 @@ def _render(run_id: str, result: dict[str, Any]) -> None:
         return
 
     state = GraphState.model_validate(result)
-    if state.status == "planned" and state.plan is not None:
-        lines = []
-        for t in state.plan.tasks:
-            deps = f"  (after {', '.join(t.depends_on)})" if t.depends_on else ""
-            lines.append(f"[bold]{t.id}[/bold]: {t.description}{deps}")
-        console.print(Panel("\n".join(lines), title="Task plan"))
+    if state.status == "reviewed":
+        lines = [f"[bold]{a.path}[/bold]  (task {a.task_id})" for a in state.artifacts]
+        console.print(Panel("\n".join(lines) or "no files", title="Generated project"))
+        if state.review is not None:
+            verdict = state.review.verdict
+            color = "green" if verdict == "approve" else "yellow"
+            body = [f"verdict: [{color}]{verdict}[/{color}]"]
+            body += [f"  • [bold]{f.file}[/bold]: {f.issue}" for f in state.review.findings]
+            console.print(Panel("\n".join(body), title="Review"))
+        console.print(f"workspace: [bold]{_WORKSPACES_DIR / run_id}[/bold]")
     console.print(f"status: [bold]{state.status}[/bold]   total cost: ${state.total_cost_usd}")
 
 
@@ -104,15 +121,19 @@ def resume(
     run_id: str,
     approve: bool = typer.Option(False, "--approve", help="Approve the pending gate."),
     reject: bool = typer.Option(False, "--reject", help="Reject the pending gate."),
+    skip: bool = typer.Option(False, "--skip", help="Skip an escalated task and continue."),
+    abort: bool = typer.Option(False, "--abort", help="Abort the run at an escalated task."),
 ) -> None:
-    """Answer a pending approval and continue a run."""
-    if approve == reject:
-        console.print("[red]pass exactly one of --approve / --reject[/red]")
+    """Answer a pending gate (approval or escalation) and continue a run."""
+    chosen = [approve, reject, skip, abort]
+    if sum(chosen) != 1:
+        console.print("[red]pass exactly one of --approve / --reject / --skip / --abort[/red]")
         raise typer.Exit(1)
     if not _DB_PATH.exists() or not _run_exists(run_id):
         console.print(f"[red]unknown run id: {run_id}[/red]")
         raise typer.Exit(1)
-    asyncio.run(_drive(run_id, Command(resume={"approved": approve}), Settings()))
+    answer = {"approved": approve, "skip": skip}
+    asyncio.run(_drive(run_id, Command(resume=answer), Settings()))
 
 
 def _run_exists(run_id: str) -> bool:

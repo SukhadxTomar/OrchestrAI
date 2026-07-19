@@ -6,9 +6,12 @@ cycle or a dangling dependency, InvalidPlanError surfaces to the caller —
 the graph decides whether to retry.
 """
 
+from decimal import Decimal
+
 from pydantic import BaseModel, Field
 
 from orchestrai.application.ports.llm import LLMProvider, Message, Usage
+from orchestrai.domain.errors import InvalidPlanError
 from orchestrai.domain.models.plan import Plan
 from orchestrai.domain.models.requirement_spec import RequirementSpec
 from orchestrai.domain.models.task import Task
@@ -49,24 +52,54 @@ class PlanResult(BaseModel):
     usage: Usage
 
 
-async def plan(spec: RequirementSpec, llm: LLMProvider) -> PlanResult:
+async def plan(spec: RequirementSpec, llm: LLMProvider, *, max_retries: int = 1) -> PlanResult:
     """Produce a validated task DAG for an approved spec.
 
+    The LLM draft passes through the domain Plan validator; a structurally
+    invalid draft (cycle, dangling dependency) is fed back to the model for
+    correction, up to ``max_retries`` times.
+
     Raises:
-        InvalidPlanError: if the model's draft violates DAG rules.
+        InvalidPlanError: if the model cannot produce a valid DAG.
     """
     spec_text = spec.model_dump_json(indent=2)
-    response = await llm.complete(
-        [
-            Message(role="system", content=_SYSTEM_PROMPT),
-            Message(role="user", content=f"RequirementSpec:\n{spec_text}"),
-        ],
-        output_schema=PlanDraft,
-    )
-    validated = Plan(
-        tasks=tuple(
-            Task(id=d.id, description=d.description, depends_on=d.depends_on)
-            for d in response.parsed.tasks
+    messages = [
+        Message(role="system", content=_SYSTEM_PROMPT),
+        Message(role="user", content=f"RequirementSpec:\n{spec_text}"),
+    ]
+    total = Usage(prompt_tokens=0, completion_tokens=0, cost_usd=Decimal("0"))
+
+    for attempt in range(1 + max_retries):
+        response = await llm.complete(messages, output_schema=PlanDraft)
+        total = Usage(
+            prompt_tokens=total.prompt_tokens + response.usage.prompt_tokens,
+            completion_tokens=total.completion_tokens + response.usage.completion_tokens,
+            cost_usd=total.cost_usd + response.usage.cost_usd,
         )
-    )
-    return PlanResult(plan=validated, usage=response.usage)
+        try:
+            validated = Plan(
+                tasks=tuple(
+                    Task(id=d.id, description=d.description, depends_on=d.depends_on)
+                    for d in response.parsed.tasks
+                )
+            )
+        except InvalidPlanError as exc:
+            if attempt == max_retries:
+                raise
+            # Show the model its own draft and the domain rule it broke.
+            messages = [
+                *messages,
+                Message(role="assistant", content=response.parsed.model_dump_json()),
+                Message(
+                    role="user",
+                    content=(
+                        f"Your plan is structurally invalid: {exc}\n"
+                        "Fix the task dependencies and return a corrected plan. "
+                        "Dependencies must form a DAG over existing task ids."
+                    ),
+                ),
+            ]
+            continue
+        return PlanResult(plan=validated, usage=total)
+
+    raise AssertionError("unreachable")  # loop always returns or raises

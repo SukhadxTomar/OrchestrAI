@@ -5,34 +5,44 @@ only contains files that are actually in use. Layers appear on disk when the
 first real code needs them (see "Target architecture" below for where things
 will live).
 
-## Current state (M4 — first LangGraph slice)
+## Current state (M9 — evals + hardening)
+
+The full SDLC runs end-to-end, and the platform now proves itself:
+
+```
+prompt → analyze → [spec approval] → plan (invalid-DAG retry) → [plan approval]
+      → select_task (BUDGET CHECKPOINT) ⇄ code → verify ⇄ debug
+      → [escalation gate: skip/abort]  → review → README + git audit trail
+Budget exhausted at any checkpoint → status "halted", zero further spend.
+```
+
+- `tests/evals/` — golden-prompt evals against a real LLM (`pytest tests/evals -m eval`,
+  needs an API key; skipped otherwise). Asserts outcomes: project built,
+  verification passed, cost within budget, git history present.
+- Planner feeds structurally invalid drafts (cycles, dangling deps) back to
+  the model for one correction round before failing.
+- 116 tests run free and offline; evals are the only paid suite.
 
 ```
 backend/
-├── pyproject.toml           # deps + tools config + `orchestrai` CLI entry point
 ├── src/orchestrai/
-│   ├── config.py            # pydantic-settings (ORCHESTRAI_ env prefix)
-│   ├── domain/              # pure business rules — no I/O, no frameworks
-│   │   ├── errors.py        # DomainError hierarchy
-│   │   ├── events.py        # frozen facts: LLMCallCompleted
-│   │   └── models/          # budget, task, plan, requirement_spec
+│   ├── config.py
+│   ├── domain/              # errors, events, models (budget/task/plan/spec/
+│   │                        #   artifact/verification)
 │   ├── application/
-│   │   ├── event_bus.py     # fan-out to sinks; sink failures isolated
-│   │   └── ports/           # llm.py (LLMProvider), events.py (EventSink)
-│   ├── agents/
-│   │   ├── analyst.py       # prompt → RequirementSpec
-│   │   └── planner.py       # spec → PlanDraft → validated Plan (DAG)
-│   ├── orchestration/
-│   │   ├── state.py         # GraphState: travels through the graph, checkpointable
-│   │   └── graph.py         # analyze → approval_gate (interrupt) → plan
+│   │   ├── event_bus.py
+│   │   ├── ports/           # llm, events, sandbox, vcs
+│   │   └── services/        # verification.py
+│   ├── agents/              # analyst, planner, coder, debugger, reviewer
+│   ├── orchestration/       # state.py, graph.py (full self-healing SDLC)
 │   ├── infrastructure/
-│   │   ├── llm/             # openrouter.py, fake.py, smoke.py
-│   │   └── telemetry/       # sinks.py: ConsoleSink + JsonlTraceSink
+│   │   ├── llm/             # openrouter, fake, smoke
+│   │   ├── sandbox/         # local.py (path-jailed subprocess)
+│   │   ├── vcs/             # git_workspace.py (GitPython, workspace-only)
+│   │   └── telemetry/       # sinks.py
 │   └── interfaces/
-│       └── cli.py           # typer+rich: `orchestrai run` / `orchestrai resume`
-└── tests/
-    ├── unit/                # mirrors src; domain at 100% coverage
-    └── integration/         # full graph runs on FakeLLM: pause/approve/reject/resume
+│       └── cli.py           # run / resume --approve|--reject|--skip|--abort
+└── tests/                   # unit + integration (111 tests)
 ```
 
 ## Try it
