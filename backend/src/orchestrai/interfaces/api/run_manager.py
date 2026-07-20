@@ -25,7 +25,7 @@ from orchestrai.infrastructure.telemetry.sinks import JsonlTraceSink
 from orchestrai.orchestration.graph import build_graph
 from orchestrai.orchestration.state import GraphState
 
-RunPhase = Literal["running", "waiting_for_approval", "finished", "failed"]
+RunPhase = Literal["running", "waiting_for_approval", "finished", "failed", "cancelled"]
 
 
 class RunHandle(BaseModel):
@@ -83,6 +83,7 @@ class RunManager:
         self._runs: dict[str, RunHandle] = {}
         self._event_sinks: dict[str, _QueueSink] = {}
         self._tasks: set[asyncio.Task[None]] = set()
+        self._task_by_run: dict[str, asyncio.Task[None]] = {}
 
     @staticmethod
     def _default_llm_factory(settings: Settings, events: EventBus) -> Any:
@@ -119,6 +120,39 @@ class RunManager:
         """Register a queue that receives this run's events, history included."""
         return self._event_sinks.setdefault(run_id, _QueueSink()).attach()
 
+    def read_artifact(self, run_id: str, relative_path: str) -> str | None:
+        """Read one generated file from a run's workspace (jailed to it).
+
+        Read-only convenience for the frontend's code viewer; returns None
+        for unknown/escaping paths instead of raising.
+        """
+        root = (self._workspaces_dir / run_id).resolve()
+        candidate = (root / relative_path).resolve()
+        if not candidate.is_relative_to(root) or not candidate.is_file():
+            return None
+        return candidate.read_text(encoding="utf-8", errors="replace")
+
+    def cancel(self, run_id: str) -> RunHandle | None:
+        """Cancel a run: stop its background task and mark it cancelled.
+
+        Safe at any point in the lifecycle:
+          * running        → the asyncio task is cancelled (the graph stops
+                             between/inside nodes; CancelledError propagates);
+          * waiting at gate → no task is running, the handle just flips;
+          * finished/failed → no-op, the terminal phase is kept.
+        """
+        handle = self._runs.get(run_id)
+        if handle is None:
+            return None
+        if handle.phase in ("finished", "failed", "cancelled"):
+            return handle
+        task = self._task_by_run.get(run_id)
+        if task is not None and not task.done():
+            task.cancel()
+        handle.phase = "cancelled"
+        handle.interrupt_payload = None
+        return handle
+
     def unsubscribe(self, run_id: str, queue: asyncio.Queue[DomainEvent]) -> None:
         sink = self._event_sinks.get(run_id)
         if sink and queue in sink.queues:
@@ -129,6 +163,7 @@ class RunManager:
     def _launch(self, run_id: str, graph_input: Any) -> None:
         task = asyncio.create_task(self._drive(run_id, graph_input))
         self._tasks.add(task)
+        self._task_by_run[run_id] = task
         task.add_done_callback(self._tasks.discard)
 
     async def _drive(self, run_id: str, graph_input: Any) -> None:
@@ -151,6 +186,10 @@ class RunManager:
                 handle.interrupt_payload = interrupts[0].value
             else:
                 handle.phase = "finished"
+        except asyncio.CancelledError:
+            # cancel() already set the phase; swallow so cleanup still runs
+            # and the cancellation doesn't bubble into the event loop.
+            handle.phase = "cancelled"
         except Exception as exc:  # surfaced via GET /runs/{id}, not swallowed
             handle.phase = "failed"
             handle.error = f"{type(exc).__name__}: {exc}"

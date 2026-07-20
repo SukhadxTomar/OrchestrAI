@@ -76,6 +76,16 @@ def create_app(manager: RunManager | None = None) -> FastAPI:
             raise HTTPException(404, f"unknown run id: {run_id}")
         return summarize(handle)
 
+    @app.get("/runs/{run_id}/files/{path:path}")
+    async def get_run_file(run_id: str, path: str, manager: Manager) -> dict[str, str]:
+        """Read one generated file from the run's workspace (read-only)."""
+        if manager.get(run_id) is None:
+            raise HTTPException(404, f"unknown run id: {run_id}")
+        content = manager.read_artifact(run_id, path)
+        if content is None:
+            raise HTTPException(404, f"no such artifact: {path}")
+        return {"path": path, "content": content}
+
     @app.post("/runs/{run_id}/approvals")
     async def answer_gate(run_id: str, request: ApprovalRequest, manager: Manager) -> RunSummary:
         if manager.get(run_id) is None:
@@ -87,6 +97,14 @@ def create_app(manager: RunManager | None = None) -> FastAPI:
         )
         if handle is None:
             raise HTTPException(409, "run is not waiting for approval")
+        return summarize(handle)
+
+    @app.delete("/runs/{run_id}")
+    async def cancel_run(run_id: str, manager: Manager) -> RunSummary:
+        """Cancel a run: stop its background task immediately."""
+        handle = manager.cancel(run_id)
+        if handle is None:
+            raise HTTPException(404, f"unknown run id: {run_id}")
         return summarize(handle)
 
     @app.websocket("/runs/{run_id}/events")

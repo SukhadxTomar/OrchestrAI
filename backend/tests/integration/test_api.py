@@ -168,3 +168,85 @@ async def test_event_subscription_receives_run_events(tmp_path: Path) -> None:
         while not late.empty():
             late_names.append(type(late.get_nowait()).__name__)
         assert late_names == names
+
+
+async def test_generated_files_are_readable_over_http(tmp_path: Path) -> None:
+    """The frontend's Code tab depends on GET /runs/{id}/files/{path}."""
+    fake = FakeLLM([SPEC_JSON, PLAN_JSON, CODE_JSON, REVIEW_JSON])
+    async with make_client(tmp_path, fake) as client:
+        run_id = (await client.post("/runs", json={"prompt": "x"})).json()["run_id"]
+        await wait_for_phase(client, run_id, "waiting_for_approval")
+        await client.post(f"/runs/{run_id}/approvals", json={"decision": "approve"})
+        await wait_for_phase(client, run_id, "waiting_for_approval")
+        await client.post(f"/runs/{run_id}/approvals", json={"decision": "approve"})
+        body = await wait_for_phase(client, run_id, "finished")
+        assert "calc.py" in body["artifacts"]
+
+        # the artifact announced over the API is fetchable, content intact
+        response = await client.get(f"/runs/{run_id}/files/calc.py")
+        assert response.status_code == 200
+        assert response.json() == {
+            "path": "calc.py",
+            "content": "def add(a, b):\n    return a + b\n",
+        }
+
+        # unknown files and path escapes are refused, run untouched
+        assert (await client.get(f"/runs/{run_id}/files/nope.py")).status_code == 404
+        assert (await client.get(f"/runs/{run_id}/files/../secrets.txt")).status_code == 404
+        assert (await client.get("/runs/nope/files/calc.py")).status_code == 404
+
+
+class _SlowFakeLLM(FakeLLM):
+    """FakeLLM that hangs forever — a run stuck mid-LLM-call, cancellable."""
+
+    def __init__(self) -> None:
+        super().__init__([])
+        self.started = asyncio.Event()
+
+    async def complete(self, messages, *, output_schema):  # type: ignore[override]
+        self.started.set()
+        await asyncio.sleep(3600)  # cancelled long before this elapses
+        raise AssertionError("unreachable")
+
+
+async def test_cancel_terminates_a_running_execution(tmp_path: Path) -> None:
+    """DELETE /runs/{id} must stop the background task, not just the UI."""
+    fake = _SlowFakeLLM()
+    manager = RunManager(Settings(_env_file=None), data_dir=tmp_path, llm_factory=lambda s, e: fake)
+    app = create_app(manager)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        run_id = (await client.post("/runs", json={"prompt": "x"})).json()["run_id"]
+        await asyncio.wait_for(fake.started.wait(), timeout=10)  # mid-LLM-call
+
+        response = await client.delete(f"/runs/{run_id}")
+        assert response.status_code == 200
+        assert response.json()["phase"] == "cancelled"
+
+        # the background asyncio task actually died — no orphan work
+        task = manager._task_by_run[run_id]
+        async with asyncio.timeout(5):
+            while not task.done():
+                await asyncio.sleep(0.02)
+        assert task.cancelled() or task.done()
+
+        # phase sticks; cancelling again is a harmless no-op
+        assert (await client.get(f"/runs/{run_id}")).json()["phase"] == "cancelled"
+        assert (await client.delete(f"/runs/{run_id}")).json()["phase"] == "cancelled"
+        # unknown runs still 404
+        assert (await client.delete("/runs/nope")).status_code == 404
+
+
+async def test_cancel_while_waiting_at_gate(tmp_path: Path) -> None:
+    """Cancelling at an approval gate flips the phase and blocks approval."""
+    fake = FakeLLM([SPEC_JSON, PLAN_JSON])
+    async with make_client(tmp_path, fake) as client:
+        run_id = (await client.post("/runs", json={"prompt": "x"})).json()["run_id"]
+        await wait_for_phase(client, run_id, "waiting_for_approval")
+
+        assert (await client.delete(f"/runs/{run_id}")).json()["phase"] == "cancelled"
+        # the gate is gone: approving a cancelled run conflicts
+        response = await client.post(f"/runs/{run_id}/approvals", json={"decision": "approve"})
+        assert response.status_code == 409
+        assert len(fake.calls) == 1  # planner never ran
