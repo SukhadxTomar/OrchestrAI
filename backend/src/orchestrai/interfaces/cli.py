@@ -23,7 +23,6 @@ from orchestrai.domain.models.budget import Budget
 from orchestrai.infrastructure.llm.openrouter import OpenRouterProvider
 from orchestrai.infrastructure.sandbox.local import LocalProcessSandbox
 from orchestrai.infrastructure.telemetry.sinks import ConsoleSink, JsonlTraceSink
-from orchestrai.infrastructure.vcs.git_workspace import GitWorkspace
 from orchestrai.orchestration.graph import build_graph
 from orchestrai.orchestration.state import GraphState
 
@@ -44,11 +43,10 @@ async def _drive(run_id: str, graph_input: Any, settings: Settings) -> None:
         events=events,
     )
     sandbox = LocalProcessSandbox(_WORKSPACES_DIR / run_id, events=events)
-    vcs = GitWorkspace(sandbox.root)
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
         async with AsyncSqliteSaver.from_conn_string(str(_DB_PATH)) as saver:
-            graph = build_graph(provider, sandbox, checkpointer=saver, events=events, vcs=vcs)
+            graph = build_graph(provider, sandbox, checkpointer=saver, events=events)
             config = {"configurable": {"thread_id": run_id}}
             result = await graph.ainvoke(graph_input, config)
             _render(run_id, result)

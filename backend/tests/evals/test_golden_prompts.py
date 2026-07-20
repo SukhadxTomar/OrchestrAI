@@ -23,7 +23,6 @@ from orchestrai.domain.models.budget import Budget
 from orchestrai.domain.models.task import TaskStatus
 from orchestrai.infrastructure.llm.openrouter import OpenRouterProvider
 from orchestrai.infrastructure.sandbox.local import LocalProcessSandbox
-from orchestrai.infrastructure.vcs.git_workspace import GitWorkspace
 from orchestrai.orchestration.graph import build_graph
 from orchestrai.orchestration.state import GraphState
 
@@ -50,9 +49,8 @@ async def test_golden_todo_api(settings: Settings, tmp_path: Path) -> None:
         model=settings.openrouter_model,
     )
     sandbox = LocalProcessSandbox(tmp_path / "ws")
-    vcs = GitWorkspace(sandbox.root)
     try:
-        graph = build_graph(provider, sandbox, checkpointer=MemorySaver(), vcs=vcs)
+        graph = build_graph(provider, sandbox, checkpointer=MemorySaver())
         cfg: dict[str, Any] = {"configurable": {"thread_id": "eval-todo"}}
         initial = GraphState(prompt=GOLDEN_PROMPT, budget=Budget(limit_usd=BUDGET_USD))
 
@@ -71,10 +69,9 @@ async def test_golden_todo_api(settings: Settings, tmp_path: Path) -> None:
     assert state.artifacts, "no files were produced"
     assert (sandbox.root / "README.md").exists()
     assert state.total_cost_usd <= BUDGET_USD
-    assert len(vcs.log()) >= 2  # at least one task commit + docs commit
 
     print(  # eval report — visible with pytest -s
         f"\n[eval] tasks verified: {len(verified)}/{len(state.plan.tasks)}  "
         f"files: {len({a.path for a in state.artifacts})}  "
-        f"cost: ${state.total_cost_usd}  commits: {len(vcs.log())}"
+        f"cost: ${state.total_cost_usd}"
     )

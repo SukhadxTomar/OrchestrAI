@@ -5,20 +5,37 @@ only contains files that are actually in use. Layers appear on disk when the
 first real code needs them (see "Target architecture" below for where things
 will live).
 
-## Current state (M9 — evals + hardening)
+## Current state (M10 — FastAPI control plane)
+
+Two interfaces over one engine — CLI for the terminal, HTTP+WebSocket for
+any frontend:
+
+```
+POST /runs                  start a run            → 202 {run_id}
+GET  /runs/{id}             status, spec/plan, cost, review verdict
+POST /runs/{id}/approvals   {"decision": "approve" | "reject" | "skip" | "abort"}
+WS   /runs/{id}/events      live event stream (history replayed on connect)
+```
+
+Run the API:
+
+```bash
+uv run uvicorn orchestrai.interfaces.api.app:create_app --factory --reload
+# interactive docs at http://127.0.0.1:8000/docs
+```
 
 The full SDLC runs end-to-end, and the platform now proves itself:
 
 ```
 prompt → analyze → [spec approval] → plan (invalid-DAG retry) → [plan approval]
       → select_task (BUDGET CHECKPOINT) ⇄ code → verify ⇄ debug
-      → [escalation gate: skip/abort]  → review → README + git audit trail
+      → [escalation gate: skip/abort]  → review → README generation
 Budget exhausted at any checkpoint → status "halted", zero further spend.
 ```
 
 - `tests/evals/` — golden-prompt evals against a real LLM (`pytest tests/evals -m eval`,
   needs an API key; skipped otherwise). Asserts outcomes: project built,
-  verification passed, cost within budget, git history present.
+  verification passed, cost within budget.
 - Planner feeds structurally invalid drafts (cycles, dangling deps) back to
   the model for one correction round before failing.
 - 116 tests run free and offline; evals are the only paid suite.
@@ -31,17 +48,18 @@ backend/
 │   │                        #   artifact/verification)
 │   ├── application/
 │   │   ├── event_bus.py
-│   │   ├── ports/           # llm, events, sandbox, vcs
+│   │   ├── ports/           # llm, events, sandbox
 │   │   └── services/        # verification.py
 │   ├── agents/              # analyst, planner, coder, debugger, reviewer
 │   ├── orchestration/       # state.py, graph.py (full self-healing SDLC)
 │   ├── infrastructure/
 │   │   ├── llm/             # openrouter, fake, smoke
 │   │   ├── sandbox/         # local.py (path-jailed subprocess)
-│   │   ├── vcs/             # git_workspace.py (GitPython, workspace-only)
 │   │   └── telemetry/       # sinks.py
 │   └── interfaces/
-│       └── cli.py           # run / resume --approve|--reject|--skip|--abort
+│       ├── cli.py           # run / resume --approve|--reject|--skip|--abort
+│       └── api/             # app.py (FastAPI routes) + run_manager.py
+│                            #   (background runs, event fan-out)
 └── tests/                   # unit + integration (111 tests)
 ```
 

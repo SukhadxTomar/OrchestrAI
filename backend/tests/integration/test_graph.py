@@ -275,7 +275,7 @@ async def test_escalation_abort_ends_the_run(sandbox: LocalProcessSandbox) -> No
     assert state.status == "aborted"
 
 
-# ── M8: review + git audit trail ─────────────────────────────────────────
+# ── M8: review + README generation ──────────────────────────────────────
 
 
 async def test_review_runs_after_all_tasks_and_writes_readme(
@@ -290,29 +290,6 @@ async def test_review_runs_after_all_tasks_and_writes_readme(
     # Reviewer saw the generated file's content.
     review_prompt = fake.calls[3][-1].content
     assert "calc.py" in review_prompt
-
-
-async def test_commit_per_verified_task_builds_audit_trail(
-    sandbox: LocalProcessSandbox,
-) -> None:
-    from orchestrai.infrastructure.vcs.git_workspace import GitWorkspace
-
-    vcs = GitWorkspace(sandbox.root)
-    fake = FakeLLM([SPEC_JSON, PLAN_JSON, T1_CODE, T2_CODE, REVIEW_JSON])
-    graph = build_graph(fake, sandbox, checkpointer=MemorySaver(), vcs=vcs)
-    cfg = config("t-audit")
-    await graph.ainvoke(initial_state(), cfg)
-    await graph.ainvoke(APPROVE, cfg)
-    await graph.ainvoke(APPROVE, cfg)
-
-    log = vcs.log()
-    assert len(log) == 3  # t1 verified, t2 verified, README
-    assert log[0].startswith("t1:")
-    assert log[1].startswith("t2:")
-    assert log[2].startswith("docs:")
-
-
-# ── M9: budget enforcement ───────────────────────────────────────────────
 
 
 async def test_exhausted_budget_halts_before_next_task(

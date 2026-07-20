@@ -30,7 +30,6 @@ from orchestrai.agents import analyst, coder, debugger, planner, reviewer
 from orchestrai.application.event_bus import EventBus
 from orchestrai.application.ports.llm import LLMProvider
 from orchestrai.application.ports.sandbox import Sandbox
-from orchestrai.application.ports.vcs import VCS
 from orchestrai.application.services.verification import VerificationService
 from orchestrai.domain.events import TaskEscalated, TaskFailed, TaskVerified
 from orchestrai.domain.models.task import TaskStatus
@@ -138,7 +137,7 @@ def _route_after_select(state: GraphState) -> str:
     return "code" if state.current_task_id is not None else "review"
 
 
-def _make_review(llm: LLMProvider, sandbox: Sandbox, vcs: VCS | None) -> NodeFn:
+def _make_review(llm: LLMProvider, sandbox: Sandbox) -> NodeFn:
     async def review(state: GraphState) -> StateUpdate:
         assert state.spec is not None
         # Deduplicated, ordered list of everything the run produced.
@@ -146,8 +145,6 @@ def _make_review(llm: LLMProvider, sandbox: Sandbox, vcs: VCS | None) -> NodeFn:
         if not paths:  # every task escalated/skipped — nothing to review
             return {"status": "reviewed"}
         result = await reviewer.review(state.spec, paths, llm, sandbox)
-        if vcs is not None:
-            vcs.commit_all("docs: project README (review complete)")
         return {
             "review": result.report,
             "status": "reviewed",
@@ -180,7 +177,7 @@ def _make_code(llm: LLMProvider, sandbox: Sandbox) -> NodeFn:
     return code
 
 
-def _make_verify(sandbox: Sandbox, events: EventBus, vcs: VCS | None) -> NodeFn:
+def _make_verify(sandbox: Sandbox, events: EventBus) -> NodeFn:
     async def verify(state: GraphState) -> StateUpdate:
         assert state.plan is not None and state.current_task_id is not None
         task = next(t for t in state.plan.tasks if t.id == state.current_task_id)
@@ -188,8 +185,6 @@ def _make_verify(sandbox: Sandbox, events: EventBus, vcs: VCS | None) -> NodeFn:
         result = await VerificationService(sandbox).verify()
         if result.passed:
             events.emit(TaskVerified(task_id=task.id, attempts=task.attempts))
-            if vcs is not None:
-                vcs.commit_all(f"{task.id}: {task.description} (verified)")
             return {
                 "plan": state.plan.with_updated_task(task.mark_verified()),
                 "last_verification": None,
@@ -274,16 +269,9 @@ def build_graph(
     sandbox: Sandbox,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
     events: EventBus | None = None,
-    vcs: VCS | None = None,
 ) -> Any:
-    """Wire the full slice into a runnable graph.
-
-    ``vcs`` is optional: when provided, it is initialised at build time and
-    every verified task (plus the final README) becomes a commit.
-    """
+    """Wire the full slice into a runnable graph."""
     bus = events or EventBus()
-    if vcs is not None:
-        vcs.init()
     graph = StateGraph(GraphState)
     # type-ignores: langgraph's node overloads want parameter-name-level
     # matches a Callable alias can't express; runtime is covered by
@@ -294,10 +282,10 @@ def build_graph(
     graph.add_node("plan_gate", _plan_gate, input_schema=GraphState)
     graph.add_node("select_task", _select_task, input_schema=GraphState)
     graph.add_node("code", _make_code(llm, sandbox), input_schema=GraphState)  # type: ignore[arg-type]
-    graph.add_node("verify", _make_verify(sandbox, bus, vcs), input_schema=GraphState)  # type: ignore[arg-type]
+    graph.add_node("verify", _make_verify(sandbox, bus), input_schema=GraphState)  # type: ignore[arg-type]
     graph.add_node("debug", _make_debug(llm, sandbox), input_schema=GraphState)  # type: ignore[arg-type]
     graph.add_node("escalation_gate", _make_escalation_gate(bus), input_schema=GraphState)  # type: ignore[arg-type]
-    graph.add_node("review", _make_review(llm, sandbox, vcs), input_schema=GraphState)  # type: ignore[arg-type]
+    graph.add_node("review", _make_review(llm, sandbox), input_schema=GraphState)  # type: ignore[arg-type]
 
     graph.add_edge(START, "analyze")
     graph.add_edge("analyze", "spec_gate")
