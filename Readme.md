@@ -1,317 +1,198 @@
+# OrchestrAI
 
-# Project Title
+An autonomous software engineer built from a team of specialized AI agents.
 
-A brief description of what this project does and who it's for
+Describe what you want in plain English and OrchestrAI takes it from there: it reads the
+requirements, plans the work, writes the code, runs the tests, fixes what breaks, reviews
+the result, and writes the docs — pausing for your approval at the points that matter. The
+goal is to run the whole software development lifecycle, not just autocomplete a function.
 
-# 🚀 AutoDev AI
+Orchestration is built on LangGraph, so a run is a checkpointed state machine. You can
+watch it live, approve or reject its decisions, kill it mid-run, and resume from disk.
 
-> **An Autonomous Software Engineer powered by Multi-Agent AI and LangGraph**
+## What it does
 
-AutoDev AI is an autonomous software engineering platform that transforms a single natural language prompt into a complete software development workflow. Instead of acting as a code completion tool, AutoDev AI coordinates a team of specialized AI agents that analyze requirements, plan implementation, design architecture, generate code, run tests, debug failures, review quality, and produce documentation.
-
-The goal is to build an AI teammate capable of executing the Software Development Life Cycle (SDLC) through structured multi-agent orchestration.
-
----
-
-# ✨ Vision
-
-Modern AI coding assistants can generate code, but they rarely manage the entire engineering process.
-
-AutoDev AI aims to bridge that gap by acting like an AI software engineer rather than a code generator.
-
-Given a prompt like:
+Give it a prompt like:
 
 ```text
 Build a Todo API using FastAPI and PostgreSQL.
 
 Features:
-- JWT Authentication
+- JWT authentication
 - CRUD
 - Docker
 - Swagger
-- Unit Tests
+- Unit tests
 ```
 
-AutoDev AI will autonomously:
+and a run walks through:
 
-* Understand the requirements
-* Create an execution plan
-* Design the project architecture
-* Generate production-ready code
-* Execute tests
-* Debug failures
-* Review code quality
-* Generate project documentation
+1. **Analyze** — turn the prompt into a structured requirement spec, flagging anything ambiguous.
+2. **Plan** — break the spec into a validated task DAG.
+3. **Code** — implement each task in dependency order, writing real files into a sandboxed workspace.
+4. **Verify** — compile the code, install dependencies, and run the tests.
+5. **Debug** — when tests fail, diagnose the cause and patch, bounded by a retry limit.
+6. **Review** — judge the finished project and generate its README.
 
----
+You sign off on the spec and the plan before the build begins, and a budget checkpoint runs
+before every task. If a run would exceed its cost ceiling, it halts cleanly instead of
+spending more.
 
-# 🎯 Goals
-
-* Build an autonomous software engineering workflow
-* Demonstrate advanced LangGraph orchestration
-* Implement production-grade AI architecture
-* Showcase multi-agent collaboration
-* Support iterative development through feedback loops
-* Provide a strong AI engineering portfolio project
-
----
-
-# 🏗 High-Level Workflow
+## The pipeline
 
 ```text
-User
- │
- ▼
-Requirement Analyzer
- │
- ▼
-Planner
- │
- ▼
-Architecture Designer
- │
- ▼
-Task Breakdown
- │
- ├──────────────┐
- ▼              ▼
-Backend      Frontend
-Engineer      Engineer
- └──────┬──────┘
-        ▼
-Code Integrator
-        ▼
-Test Runner
-        ▼
-Tests Passed?
-   │          │
-  Yes         No
-   │          │
-   ▼          ▼
-Documentation Debug Agent
-              │
-              ▼
-        Reflection Agent
-              │
-              ▼
-          Retry Coding
+prompt
+  │
+  ▼
+Analyst  ──►  requirement spec
+  │
+  ▼
+[ you approve the spec ]
+  │
+  ▼
+Planner  ──►  validated task DAG        (invalid graph → one self-correction retry)
+  │
+  ▼
+[ you approve the plan ]
+  │
+  ▼
+for each task, in dependency order:
+  │
+  ├─ budget checkpoint  ──►  over budget? halt cleanly
+  ├─ Coder    ──►  writes real files into a sandboxed workspace
+  ├─ Verify   ──►  compile → install deps → run tests
+  └─ tests fail?  ──►  Debugger patches and re-verifies
+                        (bounded retries; on exhaustion it escalates → you skip or abort)
+  │
+  ▼
+Reviewer  ──►  verdict, findings, and a generated README
 ```
 
----
+## The agents
 
-# 🤖 Core Agents
+Each agent is deliberately thin: a system prompt, an output schema, and the tools it's
+allowed to touch.
 
-### Requirement Analyzer
+- **Analyst** — turns the user's prompt into a structured requirement spec.
+- **Planner** — turns the spec into a validated task DAG, and self-corrects when the graph comes back with cycles or dangling dependencies.
+- **Coder** — implements one task at a time, writing complete files through the sandbox with the context of what came before.
+- **Debugger** — takes a verification failure and the relevant files and produces a root-cause hypothesis plus a patch.
+- **Reviewer** — reads the whole project and returns a verdict, a list of findings, and a generated README.
 
-Extracts structured project requirements from natural language.
+Verification itself isn't an agent — it's a plain pipeline (compile, then install, then
+pytest) that fails fast and hands any failure to the debugger.
 
-### Planner
+## Architecture
 
-Creates an implementation roadmap and execution strategy.
-
-### Architecture Designer
-
-Designs the project structure and software architecture.
-
-### Backend Engineer
-
-Generates backend services, APIs, authentication, and database layers.
-
-### Frontend Engineer
-
-Builds frontend applications when required.
-
-### Code Integrator
-
-Connects independently generated components.
-
-### Test Runner
-
-Executes automated tests and validates generated code.
-
-### Debug Agent
-
-Analyzes failures and attempts autonomous fixes.
-
-### Reflection Agent
-
-Evaluates previous attempts and improves future execution.
-
-### Reviewer
-
-Performs code quality, security, and architecture reviews.
-
-### Documentation Agent
-
-Generates project documentation automatically.
-
----
-
-# 🧠 Architecture
-
-The project follows **Clean Architecture** with **Ports & Adapters** to keep business logic independent from frameworks and infrastructure.
+The project follows clean architecture with ports and adapters, so the business logic stays
+independent of frameworks and infrastructure. Dependencies only ever point inward.
 
 ```text
-Interfaces
-        │
-        ▼
-Orchestration (LangGraph)
-        │
-        ▼
-Application (Agents / Use Cases)
-        │
-        ▼
-Domain (Business Models & Rules)
-        │
-        ▼
-Ports (LLM, Tools, Memory, Events)
-        │
-        ▼
-Infrastructure (OpenRouter, Filesystem, Git, Docker, RAG)
+Interfaces      CLI, HTTP + WebSocket API
+    │
+    ▼
+Orchestration   LangGraph graph, state, and routing
+    │
+    ▼
+Application      agents, services, and the ports they depend on
+    │
+    ▼
+Domain          pure business models and rules — depends on nothing
 ```
 
----
+Infrastructure sits on the outside and implements the application's ports: OpenRouter for
+the LLM, a path-jailed local sandbox for execution, SQLite for checkpoints, and telemetry
+sinks for the event stream. See `docs/ARCHITECTURE.md` for the full file-by-file map.
 
-# 🛠 Tech Stack
+## Tech stack
 
-* Python 3.12+
-* LangGraph
-* LangChain
-* FastAPI
-* Pydantic v2
-* OpenRouter
-* SQLite (initially)
-* FAISS
-* GitPython
-* Docker
-* Ruff
-* Black
-* Pytest
+**Backend**
 
----
+- Python 3.12+
+- LangGraph, with SQLite checkpointing, for orchestration
+- FastAPI and Uvicorn for the HTTP/WebSocket API
+- Typer for the CLI
+- Pydantic v2 and pydantic-settings for models and config
+- httpx talking to OpenRouter for the LLM
+- Rich and structlog for output and logging
+- Ruff (lint and format), Mypy (strict), and Pytest for quality
 
-# 📁 Repository Structure
+**Frontend**
 
-Monorepo with a strict frontend/backend split. The backend is a fully
-independent Python application; any frontend communicates with it only
-through its HTTP/WebSocket API.
+- React, TypeScript, and Vite
+- Zustand for state, Monaco for the code viewer, Tailwind for styling
 
-The tree below is the **target architecture** — folders are created
-incrementally, only when a milestone actually needs them. See
-`backend/README.md` for what exists today.
+## Getting started
+
+Run it from the terminal:
+
+```bash
+cd backend
+uv sync
+uv run orchestrai run "Build a Todo API with FastAPI and JWT auth"
+# a spec appears and the run pauses for approval, then:
+uv run orchestrai resume <run-id> --approve
+```
+
+Or run the API and drive it over HTTP:
+
+```bash
+cd backend
+uv run uvicorn orchestrai.interfaces.api.app:create_app --factory --reload
+# interactive docs at http://127.0.0.1:8000/docs
+```
+
+And the web console:
+
+```bash
+cd frontend
+npm install
+npm run dev        # http://localhost:5173
+```
+
+The frontend runs on its own with no backend — a built-in simulation speaks the same event
+grammar, so every screen is live — and it switches to real runs automatically once the API
+is up. There's more detail in `backend/README.md` and `frontend/README.md`.
+
+## Repository layout
 
 ```text
-orchestrai/
-├── frontend/                        # Any future frontend (React, Vue, Svelte, ...)
-│
-├── backend/                         # The entire Python application
-│   ├── pyproject.toml               # deps + ruff + mypy + pytest config
-│   ├── src/orchestrai/
-│   │   ├── domain/                  # pure business models & rules (no I/O)
-│   │   │   └── models/
-│   │   ├── application/
-│   │   │   ├── ports/               # Protocols: llm, sandbox, events, repos, vcs
-│   │   │   └── services/            # use cases: verification, cost tracking
-│   │   ├── agents/                  # analyst, planner, coder, debugger, reviewer
-│   │   ├── orchestration/           # LangGraph graph, state, nodes, routing
-│   │   ├── infrastructure/          # adapters: llm, sandbox, persistence,
-│   │   │                            #           vcs, telemetry
-│   │   ├── interfaces/
-│   │   │   └── cli/                 # v1 interface (FastAPI control plane later)
-│   │   └── config.py                # pydantic-settings
-│   └── tests/
-│       ├── unit/
-│       ├── integration/
-│       └── evals/                   # golden-prompt e2e (opt-in, real LLMs)
-│
-├── docs/                            # architecture notes, ADRs
-├── .github/workflows/               # CI (backend quality gates)
-├── .gitignore
-└── Readme.md
+OrchestrAI/
+├── backend/     Python engine: agents, orchestration, sandbox, CLI + API
+├── frontend/    React console for watching and approving runs
+├── docs/        architecture notes
+└── .github/     CI (backend quality gates)
 ```
 
----
+## Project status
 
-# 🗺 Development Roadmap
+The full lifecycle works end to end today — analyze, plan, code, verify, self-heal, and
+review — with human approval gates, cost control, checkpoint and resume, and both a CLI and
+an HTTP/WebSocket API over the same engine. The test suite has 121 tests: 116 run offline
+for free, and an opt-in set runs golden-prompt evals against a real LLM.
 
-### Milestone 1
+It's an honest MVP, not a finished product. The main gaps:
 
-* Foundation
-* Core Architecture
-* LangGraph State
-* Requirement Analyzer
-* Planner
+- Generated code runs in the orchestrator's own Python environment; Docker isolation isn't wired up yet.
+- The API has no authentication or multi-user story.
+- The run registry is in-process and single-node.
 
-### Milestone 2
+## Ideas for later
 
-* Architecture Designer
-* Task Breakdown
-* Filesystem Tools
+- Docker-isolated execution
+- Support for multiple LLM providers
+- RAG over technical documentation
+- GitHub pull request generation
+- Browser automation and MCP tools
+- Long-term memory across runs
+- Multi-project management and distributed agents
 
-### Milestone 3
+## Contributing
 
-* Backend Engineering Agent
+Contributions, questions, and architecture suggestions are all welcome. This is an
+exploration of what production-grade autonomous software engineering can look like with
+modern agent orchestration, so discussion about the design is as useful as code.
 
-### Milestone 4
+## License
 
-* Project Scaffolding
-
-### Milestone 5
-
-* Test Runner
-* Retry Loop
-
-### Milestone 6
-
-* Debug Agent
-* Reflection Loop
-
-### Milestone 7
-
-* Reviewer
-* Documentation Generator
-
-### Milestone 8
-
-* GitHub Integration
-
-### Milestone 9
-
-* RAG for Technical Documentation
-
-### Milestone 10
-
-* Human Approval
-* Long-Term Memory
-* Advanced Multi-Agent Collaboration
-
----
-
-# 🔮 Future Features
-
-* Multi-LLM support
-* Browser automation
-* MCP integration
-* GitHub Pull Request generation
-* Docker execution
-* Long-term memory
-* Human approval checkpoints
-* Multi-project management
-* Autonomous code refactoring
-* Distributed agent execution
-
----
-
-# 🤝 Contributing
-
-Contributions, discussions, and architecture suggestions are welcome. The goal of AutoDev AI is to explore production-grade autonomous software engineering systems using modern AI orchestration techniques.
-
----
-
-# 📜 License
-
-This project is released under the MIT License.
-
----
-
-> **AutoDev AI is not just another AI code generator—it's an autonomous software engineering platform designed to orchestrate the complete software development lifecycle using specialized AI agents.**
+Released under the MIT License.
