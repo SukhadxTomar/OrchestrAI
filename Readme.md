@@ -187,8 +187,3 @@ It's an honest MVP, not a finished product. The main gaps:
 - Long-term memory across runs
 - Multi-project management and distributed agents
 
-## Contributing
-
-Contributions, questions, and architecture suggestions are all welcome. This is an
-exploration of what production-grade autonomous software engineering can look like with
-modern agent orchestration, so discussion about the design is as useful as code.
